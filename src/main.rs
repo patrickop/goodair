@@ -116,7 +116,7 @@ fn sensiron_send(device: &I2CDevice, data: u16) -> bool {
     bytes_written == 3
 }
 
-fn sensiron_read_u16<const COUNT: usize>(device: &I2CDevice) -> std::result::Result<[u16;COUNT], String> where [(); COUNT*3]: {
+async fn sensiron_read_u16<const COUNT: usize>(device: &I2CDevice) -> std::result::Result<[u16;COUNT], String> where [(); COUNT*3]: {
     let bytes: [u8;COUNT*3] = [0;COUNT*3];
     let pointer_bytes = bytes.as_ptr();
     let bytes_read:usize = unsafe {
@@ -176,9 +176,9 @@ async fn read_scd40(state: Readings) {
         // TODO: make async
 
         sensiron_send(&session.device, READ_MEASUREMENT);
-        sleep(Duration::from_millis(1));
+        async_std::task::sleep(Duration::from_millis(1)).await;
 
-        let [co2, temp_raw, rh_raw] = sensiron_read_u16::<3>(&session.device).expect("cannot read co2");
+        let [co2, temp_raw, rh_raw] = sensiron_read_u16::<3>(&session.device).await.expect("cannot read co2");
         let temp = -45.0 + 175.0 * ( temp_raw as f32 / 65536.0);
         let rh = 100.0 * ( rh_raw as f32 / 65536.0);
         *(state.co2_ppm.lock().unwrap()) = co2 as u32;
