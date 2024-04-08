@@ -6,12 +6,12 @@ use std::thread::sleep;
 use std::time::Duration;
 const CRC8_POLYNOMIAL: u8 = 0x31;
 const CRC8_INIT: u8 = 0xFF;
-const start_periodic_measurement:u16 = 0x21b1;
-const read_measurement:u16 = 0xec05;
-const get_status_ready:u16 = 0xe4b8;
-const i2c_slave:u16 = 0x0703;
-const stop_periodic_measurement:u16 = 0x3f86;
-const address:u8 = 0x62;
+const START_PERIODIC_MEASUREMENT:u16 = 0x21b1;
+const READ_MEASUREMENT:u16 = 0xec05;
+const GET_STATUS_READY:u16 = 0xe4b8;
+const I2C_SLAVE:u64 = 0x0703;
+const STOP_PERIODIC_MEASUREMENT:u16 = 0x3f86;
+const SCD40_ADDRESS:u64 = 0x62;
 
 struct I2CDevice {
     fd: std::os::unix::io::RawFd,
@@ -25,7 +25,7 @@ impl I2CDevice {
         if fd < 0 {
             return Err(std::io::Error::last_os_error());
         }
-        if unsafe { libc::ioctl(fd,i2c_slave, *address) }  < 0 {
+        if unsafe { libc::ioctl(fd,I2C_SLAVE, *address) }  < 0 {
             return Err(std::io::Error::last_os_error());
         }
         return Ok(I2CDevice { fd })
@@ -48,13 +48,13 @@ struct SCD40Session {
 impl SCD40Session {
     fn new(device: I2CDevice) -> Result<Self, String> {
         println!("sending start measurement");
-        if !sensiron_send(&device,start_periodic_measurement) {
+        if !sensiron_send(&device,START_PERIODIC_MEASUREMENT) {
             return Err("failed to start session".to_string());
         }
         Ok(SCD40Session {device})
     }
     //fn read_if_available(self) -> Option<[i32;3]> {
-    //    sensiron_send(&session.device, get_status_ready);
+    //    sensiron_send(&session.device, GET_STATUS_READY);
     //    sleep(Duration::from_millis(1));
 
     //    sensiron_send(&session.device, read_measurement);
@@ -68,7 +68,7 @@ impl SCD40Session {
 impl Drop for SCD40Session {
     fn drop(&mut self) {
         println!("ending measurment");
-        sensiron_send(&self.device,stop_periodic_measurement);
+        sensiron_send(&self.device,STOP_PERIODIC_MEASUREMENT);
     }
 }
 
@@ -101,20 +101,20 @@ fn sensiron_send(device: &I2CDevice, data: u16) -> bool {
     bytes_written == 3
 }
 
-fn sensiron_read_u16<const count: usize>(device: &I2CDevice) -> Result<[u16;count], String> where [(); count*3]: {
-    let mut bytes: [u8;count*3] = [0;count*3];
+fn sensiron_read_u16<const COUNT: usize>(device: &I2CDevice) -> Result<[u16;COUNT], String> where [(); COUNT*3]: {
+    let bytes: [u8;COUNT*3] = [0;COUNT*3];
     let pointer_bytes = bytes.as_ptr();
     let bytes_read = unsafe {
         libc::read(device.fd, pointer_bytes as *mut libc::c_void, 9)
     };
 
-    if bytes_read != (count*3).try_into().unwrap() {
+    if bytes_read != (COUNT*3).try_into().unwrap() {
         return Err("Read not complete".to_string());
     }
 
-    let mut result: [u16;count] = [0;count];
+    let mut result: [u16;COUNT] = [0;COUNT];
 
-    for i in 0..count {
+    for i in 0..COUNT {
         let bound = (i+1)*3-1;
         let expected_crc = sensirion_common_generate_crc(&bytes[(i*3)..bound]);
 
@@ -143,13 +143,13 @@ fn main() {
 
     let bus = "/dev/i2c-1";
 
-    let device = I2CDevice::new(&bus,&address).expect("failed to get device");
+    let device = I2CDevice::new(&bus,&SCD40_ADDRESS).expect("failed to get device");
     let session = SCD40Session::new(device).expect("failed to start session");
 
     while running.load(Ordering::SeqCst) {
         sleep(Duration::from_millis(5100));
 
-        sensiron_send(&session.device, read_measurement);
+        sensiron_send(&session.device, READ_MEASUREMENT);
         sleep(Duration::from_millis(1));
 
         let [co2, temp_raw, rh_raw] = sensiron_read_u16::<3>(&session.device).expect("cannot read co2");
