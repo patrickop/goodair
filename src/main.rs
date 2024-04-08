@@ -1,9 +1,18 @@
 #![feature(generic_const_exprs)]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use atomic_float::AtomicF64;
+use std::sync::{Arc,Mutex};
 use std::ffi::CString;
 use std::thread::sleep;
 use std::time::Duration;
+use prometheus_client::encoding::EncodeLabelValue;
+use prometheus_client::encoding::{text::encode, EncodeLabelSet};
+use prometheus_client::metrics::counter::Counter;
+use prometheus_client::metrics::family::Family;
+use prometheus_client::registry::Registry;
+use tide::{Middleware, Next, Request, Result, Response, StatusCode};
+use async_std::task;
+
 const CRC8_POLYNOMIAL: u8 = 0x31;
 const CRC8_INIT: u8 = 0xFF;
 const START_PERIODIC_MEASUREMENT:u16 = 0x21b1;
@@ -19,7 +28,7 @@ struct I2CDevice {
 
 
 impl I2CDevice {
-    fn new(bus_path: &str, address: &u64) -> Result<Self, std::io::Error> {
+    fn new(bus_path: &str, address: &u64) -> std::result::Result<Self, std::io::Error> {
         let c_bus_path = CString::new(bus_path).unwrap();
         let fd = unsafe {libc::open(c_bus_path.as_ptr(), libc::O_RDWR)};
         if fd < 0 {
@@ -46,11 +55,17 @@ struct SCD40Session {
 }
 
 impl SCD40Session {
-    fn new(device: I2CDevice) -> Result<Self, String> {
+    async fn new(device: I2CDevice) -> std::result::Result<Self, String> {
+        if !sensiron_send(&device,STOP_PERIODIC_MEASUREMENT) {
+            return Err("failed to end session".to_string());
+        }
+        async_std::task::sleep(Duration::from_millis(1000)).await;
         println!("sending start measurement");
         if !sensiron_send(&device,START_PERIODIC_MEASUREMENT) {
             return Err("failed to start session".to_string());
         }
+        async_std::task::sleep(Duration::from_millis(5100)).await;
+        println!("SCD40 ready");
         Ok(SCD40Session {device})
     }
     //fn read_if_available(self) -> Option<[i32;3]> {
@@ -101,14 +116,14 @@ fn sensiron_send(device: &I2CDevice, data: u16) -> bool {
     bytes_written == 3
 }
 
-fn sensiron_read_u16<const COUNT: usize>(device: &I2CDevice) -> Result<[u16;COUNT], String> where [(); COUNT*3]: {
+fn sensiron_read_u16<const COUNT: usize>(device: &I2CDevice) -> std::result::Result<[u16;COUNT], String> where [(); COUNT*3]: {
     let bytes: [u8;COUNT*3] = [0;COUNT*3];
     let pointer_bytes = bytes.as_ptr();
-    let bytes_read = unsafe {
+    let bytes_read:usize = unsafe {
         libc::read(device.fd, pointer_bytes as *mut libc::c_void, 9)
-    };
+    }.try_into().unwrap();
 
-    if bytes_read != (COUNT*3).try_into().unwrap() {
+    if bytes_read != COUNT*3 {
         return Err("Read not complete".to_string());
     }
 
@@ -129,25 +144,36 @@ fn sensiron_read_u16<const COUNT: usize>(device: &I2CDevice) -> Result<[u16;COUN
     Ok(result)
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct Labels {
+    room: String,
+}
 
+#[derive(Clone)]
+struct Readings {
+    co2_ppm: Arc<Mutex<u32>>,
+    temp_c: Arc<Mutex<f32>>,
+    rh_percent: Arc<Mutex<f32>>,
+}
 
+impl Readings {
+    fn new(co2_ppm: u32, temp_c: f32, rh_percent: f32) -> std::result::Result<Self, std::io::Error> {
+        Ok(Readings {
+            co2_ppm: Arc::new(Mutex::new(co2_ppm)),
+            temp_c: Arc::new(Mutex::new(temp_c)),
+            rh_percent: Arc::new(Mutex::new(rh_percent)),
+        })
+    }
+}
 
-fn main() {
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-
-    // Set the signal handler
-    ctrlc::set_handler(move || {
-        r.store(false, Ordering::SeqCst);
-    }).expect("Error setting Ctrl-C handler");
-
+async fn read_scd40(state: Readings) {
     let bus = "/dev/i2c-1";
 
     let device = I2CDevice::new(&bus,&SCD40_ADDRESS).expect("failed to get device");
-    let session = SCD40Session::new(device).expect("failed to start session");
+    let session = SCD40Session::new(device).await.expect("failed to start session");
 
-    while running.load(Ordering::SeqCst) {
-        sleep(Duration::from_millis(5100));
+    loop {
+        // TODO: make async
 
         sensiron_send(&session.device, READ_MEASUREMENT);
         sleep(Duration::from_millis(1));
@@ -155,14 +181,58 @@ fn main() {
         let [co2, temp_raw, rh_raw] = sensiron_read_u16::<3>(&session.device).expect("cannot read co2");
         let temp = -45.0 + 175.0 * ( temp_raw as f32 / 65536.0);
         let rh = 100.0 * ( rh_raw as f32 / 65536.0);
-        println!("CO2: {} ppm, Temp: {} C, RH: {} %", co2, temp, rh);
+        *(state.co2_ppm.lock().unwrap()) = co2 as u32;
+        *(state.temp_c.lock().unwrap()) = temp;
+        *(state.rh_percent.lock().unwrap()) = rh;
+        async_std::task::sleep(Duration::from_millis(5100)).await;
     }
-
-
-
-
-
-
-
 }
+
+async fn get_readings(req: Request<Readings>) -> tide::Result {
+    Ok(Response::builder(StatusCode::Ok).body(format!("co2: {} ppm, temp: {} C, RH: {} %", 
+        *(req.state().co2_ppm.lock().unwrap()),
+        *(req.state().temp_c.lock().unwrap()),
+        *(req.state().rh_percent.lock().unwrap()))).build())
+}
+
+
+
+#[async_std::main]
+async fn main() -> std::result::Result<(), std::io::Error> {
+
+    let state: Readings = Readings::new ( 500, 20.0, 50.0)?;
+
+    let reader_state = state.clone();
+    task::spawn(async move {
+        read_scd40(reader_state).await;
+    });
+
+
+
+
+    tide::log::start();
+    let mut app = tide::with_state(state);
+    app.at("/").get(get_readings);
+    app.listen("goodair.local:9900").await?;
+    Ok(())
+}
+    //let mut registry = Registry::default();
+    //let co2_metric = Family::<Labels, Gauge>::default();
+    ////let temp_c = Family::<Labels, Gauge>::default();
+    ////let rh = Family::<Labels, Gauge>::default();
+    //registry.register(
+    //    "co2_ppm",
+    //    "CO2 concentration in PPM",
+    //    co2_metric.clone(),
+    //);
+
+
+
+
+
+
+
+
+
+
 
