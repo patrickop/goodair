@@ -1,0 +1,12 @@
+[Unit]
+Description=Prometheus Service
+After=network.target
+
+[Service]
+Type=simple
+User=prometheus
+ExecStart=/opt/goodair/prometheus/prometheus-2.51.1.linux-arm64/prometheus --config.file=/opt/goodair/prometheus.yml --storage.tsdb.retention.time=120d
+WorkingDirectory=/opt/goodair/prometheus
+
+[Install]
+WantedBy=multi-user.target

@@ -264,7 +264,7 @@ async fn main() -> std::result::Result<(), std::io::Error> {
                 .build();
             Ok(response)
         });
-    app.listen("goodair.local:9900").await?;
+    app.listen("0.0.0.0:9900").await?;
     Ok(())
 }
     ////let temp_c = Family::<Labels, Gauge>::default();
