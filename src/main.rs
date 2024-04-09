@@ -1,25 +1,21 @@
 #![feature(generic_const_exprs)]
-use std::sync::atomic::{AtomicBool, Ordering};
-use atomic_float::AtomicF64;
-use std::sync::{Arc,Mutex};
+use std::sync::Arc;
 use std::ffi::CString;
 use core::sync::atomic::AtomicU64;
-use std::thread::sleep;
 use std::time::Duration;
-use prometheus_client::encoding::EncodeLabelValue;
 use prometheus_client::encoding::{text::encode, EncodeLabelSet};
-use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::registry::Registry;
 use prometheus_client::metrics::gauge::Gauge;
-use tide::{Middleware, Next, Request, Result, Response, StatusCode};
+use tide::{Request, Response, StatusCode};
 use async_std::task;
+use prometheus_client::registry::Unit::Other;
 
 const CRC8_POLYNOMIAL: u8 = 0x31;
 const CRC8_INIT: u8 = 0xFF;
 const START_PERIODIC_MEASUREMENT:u16 = 0x21b1;
 const READ_MEASUREMENT:u16 = 0xec05;
-const GET_STATUS_READY:u16 = 0xe4b8;
+//const GET_STATUS_READY:u16 = 0xe4b8;
 const I2C_SLAVE:u64 = 0x0703;
 const STOP_PERIODIC_MEASUREMENT:u16 = 0x3f86;
 const SCD40_ADDRESS:u64 = 0x62;
@@ -151,23 +147,6 @@ struct Labels {
     room: String,
 }
 
-#[derive(Clone)]
-struct Readings {
-    co2_ppm: Arc<Mutex<u32>>,
-    temp_c: Arc<Mutex<f32>>,
-    rh_percent: Arc<Mutex<f32>>,
-}
-
-
-impl Readings {
-    fn new(co2_ppm: u32, temp_c: f32, rh_percent: f32) -> std::result::Result<Self, std::io::Error> {
-        Ok(Readings {
-            co2_ppm: Arc::new(Mutex::new(co2_ppm)),
-            temp_c: Arc::new(Mutex::new(temp_c)),
-            rh_percent: Arc::new(Mutex::new(rh_percent)),
-        })
-    }
-}
 
 #[derive(Clone)]
 struct State {
@@ -203,7 +182,7 @@ async fn read_scd40(co2_metric: Family<Labels,Gauge>, temp_c_metric: Family<Labe
     }
 }
 
-async fn get_readings(req: Request<State>) -> tide::Result {
+async fn get_readings(_req: Request<State>) -> tide::Result {
     //Ok(Response::builder(StatusCode::Ok).body(format!("co2: {} ppm, temp: {} C, RH: {} %", 
     //    *(req.state().co2_ppm.lock().unwrap()),
     //    *(req.state().temp_c.lock().unwrap()),
@@ -220,21 +199,24 @@ async fn main() -> std::result::Result<(), std::io::Error> {
 
     let mut registry = Registry::default();
     let co2_metric = Family::<Labels, Gauge>::default();
-    registry.register(
-        "co2_ppm",
+    registry.register_with_unit(
+        "co2_concentration",
         "CO2 concentration in PPM",
+        Other("ppm".to_string()),
         co2_metric.clone(),
     );
     let temp_c_metric = Family::<Labels, Gauge<f64,AtomicU64>>::default();
-    registry.register(
-        "temp_c_",
+    registry.register_with_unit(
+        "temperature",
         "The temperature in degrees Celsius",
+        Other("C".to_string()),
         temp_c_metric.clone(),
     );
     let rh_metric = Family::<Labels, Gauge<f64,AtomicU64>>::default();
-    registry.register(
-        "rh_percent",
+    registry.register_with_unit(
+        "relative_humidity",
         "The relative humidity in Percent",
+        Other("percent".to_string()),
         rh_metric.clone(),
     );
 

@@ -4,7 +4,7 @@
 - [x] Read SCD40
 - [x] Implement basic web service
 - [x] Add prometheus client code
-- [ ] Prometheus config
+- [x] Prometheus config
 - [ ] Read SGP40
 - [ ] Read PMSA003I
 - [ ] Launch architecture
