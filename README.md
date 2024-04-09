@@ -7,7 +7,7 @@
 - [x] Prometheus config
 - [ ] Read SGP40
 - [ ] Read PMSA003I
-- [ ] Launch architecture
+- [x] Launch architecture
 - [ ] read Radoneye
 - [ ] Design enclosure
 
