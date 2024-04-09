@@ -1,0 +1,10 @@
+[Unit]
+Description=Goodair Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/goodair/bin/airquality
+
+[Install]
+WantedBy=multi-user.target

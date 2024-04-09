@@ -9,13 +9,28 @@ install_prometheus:
 	sudo sudo useradd --system prometheus
 	sudo chown prometheus:prometheus /opt/goodair/prometheus
 
-update_config:
+update_prometheus_config:
 	sudo cp prometheus.yml /opt/goodair/prometheus.yml
 	sudo systemctl restart prometheus
 
-update_service:
+update_prometheus_service:
 	sudo cp prometheus.service /etc/systemd/system/
 	systemctl daemon-reload
 	sudo systemctl restart prometheus
 
+update_goodair_service:
+	sudo cp goodair.service /etc/systemd/system/
+	systemctl daemon-reload
+	sudo systemctl restart goodair
 
+install_goodair:
+	cargo build --release
+	sudo mkdir -p /opt/goodair/bin
+	sudo cp -r target/release/* /opt/goodair/bin/
+
+status:
+	sudo systemctl status prometheus
+	sudo systemctl status goodair
+start:
+	sudo systemctl start prometheus
+	sudo systemctl start goodair
