@@ -5,9 +5,11 @@
 - [x] Implement basic web service
 - [x] Add prometheus client code
 - [x] Prometheus config
+- [x] Launch architecture
+- [ ] Refactor to libs
+- [ ] add helpers
 - [ ] Read SGP40
 - [ ] Read PMSA003I
-- [x] Launch architecture
 - [ ] read Radoneye
 - [ ] Design enclosure
 

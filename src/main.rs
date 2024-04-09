@@ -223,15 +223,11 @@ async fn main() -> std::result::Result<(), std::io::Error> {
     let state = State {
         registry: Arc::new(registry)};
 
-
-
     task::spawn(async move {
         read_scd40(co2_metric,temp_c_metric,rh_metric).await;
     });
 
     let mut app = tide::with_state(   state );
-
-
 
     tide::log::start();
     //let mut app = tide::with_state(state);
