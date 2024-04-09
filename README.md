@@ -3,11 +3,12 @@
 
 - [x] Read SCD40
 - [x] Implement basic web service
-- [ ] Add prometheus client code
+- [x] Add prometheus client code
 - [ ] Read SGP40
 - [ ] Read PMSA003I
 - [ ] Launch architecture
 - [ ] read Radoneye
+- [ ] Design enclosure
 
 # Datasheets
 

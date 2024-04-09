@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use atomic_float::AtomicF64;
 use std::sync::{Arc,Mutex};
 use std::ffi::CString;
+use core::sync::atomic::AtomicU64;
 use std::thread::sleep;
 use std::time::Duration;
 use prometheus_client::encoding::EncodeLabelValue;
@@ -10,6 +11,7 @@ use prometheus_client::encoding::{text::encode, EncodeLabelSet};
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::registry::Registry;
+use prometheus_client::metrics::gauge::Gauge;
 use tide::{Middleware, Next, Request, Result, Response, StatusCode};
 use async_std::task;
 
@@ -156,6 +158,7 @@ struct Readings {
     rh_percent: Arc<Mutex<f32>>,
 }
 
+
 impl Readings {
     fn new(co2_ppm: u32, temp_c: f32, rh_percent: f32) -> std::result::Result<Self, std::io::Error> {
         Ok(Readings {
@@ -166,7 +169,16 @@ impl Readings {
     }
 }
 
-async fn read_scd40(state: Readings) {
+#[derive(Clone)]
+struct State {
+    registry: Arc<Registry>,
+}
+
+async fn read_scd40(co2_metric: Family<Labels,Gauge>, temp_c_metric: Family<Labels,Gauge<f64, AtomicU64>>,
+                    rh_percent_metric: Family<Labels,Gauge<f64, AtomicU64>>) {
+    let room = String::from("Hobby room");
+    let label = Labels{room:room};
+
     let bus = "/dev/i2c-1";
 
     let device = I2CDevice::new(&bus,&SCD40_ADDRESS).expect("failed to get device");
@@ -181,18 +193,22 @@ async fn read_scd40(state: Readings) {
         let [co2, temp_raw, rh_raw] = sensiron_read_u16::<3>(&session.device).await.expect("cannot read co2");
         let temp = -45.0 + 175.0 * ( temp_raw as f32 / 65536.0);
         let rh = 100.0 * ( rh_raw as f32 / 65536.0);
-        *(state.co2_ppm.lock().unwrap()) = co2 as u32;
-        *(state.temp_c.lock().unwrap()) = temp;
-        *(state.rh_percent.lock().unwrap()) = rh;
+        co2_metric.get_or_create(&label).set(co2 as i64);
+        temp_c_metric.get_or_create(&label).set(temp as f64);
+        rh_percent_metric.get_or_create(&label).set(rh as f64);
+        //*(state.co2_ppm.lock().unwrap()) = co2 as u32;
+        //*(state.temp_c.lock().unwrap()) = temp;
+        //*(state.rh_percent.lock().unwrap()) = rh;
         async_std::task::sleep(Duration::from_millis(5100)).await;
     }
 }
 
-async fn get_readings(req: Request<Readings>) -> tide::Result {
-    Ok(Response::builder(StatusCode::Ok).body(format!("co2: {} ppm, temp: {} C, RH: {} %", 
-        *(req.state().co2_ppm.lock().unwrap()),
-        *(req.state().temp_c.lock().unwrap()),
-        *(req.state().rh_percent.lock().unwrap()))).build())
+async fn get_readings(req: Request<State>) -> tide::Result {
+    //Ok(Response::builder(StatusCode::Ok).body(format!("co2: {} ppm, temp: {} C, RH: {} %", 
+    //    *(req.state().co2_ppm.lock().unwrap()),
+    //    *(req.state().temp_c.lock().unwrap()),
+    //    *(req.state().rh_percent.lock().unwrap()))).build())
+    Ok(Response::builder(StatusCode::Ok).body(format!("todo")).build())
 }
 
 
@@ -200,31 +216,59 @@ async fn get_readings(req: Request<Readings>) -> tide::Result {
 #[async_std::main]
 async fn main() -> std::result::Result<(), std::io::Error> {
 
-    let state: Readings = Readings::new ( 500, 20.0, 50.0)?;
+    //let state: Readings = Readings::new ( 500, 20.0, 50.0)?;
 
-    let reader_state = state.clone();
+    let mut registry = Registry::default();
+    let co2_metric = Family::<Labels, Gauge>::default();
+    registry.register(
+        "co2_ppm",
+        "CO2 concentration in PPM",
+        co2_metric.clone(),
+    );
+    let temp_c_metric = Family::<Labels, Gauge<f64,AtomicU64>>::default();
+    registry.register(
+        "temp_c_",
+        "The temperature in degrees Celsius",
+        temp_c_metric.clone(),
+    );
+    let rh_metric = Family::<Labels, Gauge<f64,AtomicU64>>::default();
+    registry.register(
+        "rh_percent",
+        "The relative humidity in Percent",
+        rh_metric.clone(),
+    );
+
+    let state = State {
+        registry: Arc::new(registry)};
+
+
+
     task::spawn(async move {
-        read_scd40(reader_state).await;
+        read_scd40(co2_metric,temp_c_metric,rh_metric).await;
     });
 
+    let mut app = tide::with_state(   state );
 
 
 
     tide::log::start();
-    let mut app = tide::with_state(state);
+    //let mut app = tide::with_state(state);
     app.at("/").get(get_readings);
+    app.at("/metrics")
+        .get(|req: tide::Request<State>| async move {
+            let mut encoded = String::new();
+            encode(&mut encoded, &req.state().registry).unwrap();
+            let response = tide::Response::builder(200)
+                .body(encoded)
+                .content_type("application/openmetrics-text; version=1.0.0; charset=utf-8")
+                .build();
+            Ok(response)
+        });
     app.listen("goodair.local:9900").await?;
     Ok(())
 }
-    //let mut registry = Registry::default();
-    //let co2_metric = Family::<Labels, Gauge>::default();
     ////let temp_c = Family::<Labels, Gauge>::default();
     ////let rh = Family::<Labels, Gauge>::default();
-    //registry.register(
-    //    "co2_ppm",
-    //    "CO2 concentration in PPM",
-    //    co2_metric.clone(),
-    //);
 
 
 
