@@ -11,6 +11,7 @@
 - [ ] Read SGP40
 - [x] Read PMSA003I
 - [ ] read Radoneye
+- [ ] add formaldehyde sensor
 - [ ] Design enclosure
 
 # Datasheets
