@@ -19,6 +19,8 @@ const READ_MEASUREMENT:u16 = 0xec05;
 const I2C_SLAVE:u64 = 0x0703;
 const STOP_PERIODIC_MEASUREMENT:u16 = 0x3f86;
 const SCD40_ADDRESS:u64 = 0x62;
+const PMSA003I_ADDRESS:u64 = 0x12;
+const BUS:&str = "/dev/i2c-1";
 
 struct I2CDevice {
     fd: std::os::unix::io::RawFd,
@@ -158,9 +160,8 @@ async fn read_scd40(co2_metric: Family<Labels,Gauge>, temp_c_metric: Family<Labe
     let room = String::from("Hobby room");
     let label = Labels{room:room};
 
-    let bus = "/dev/i2c-1";
 
-    let device = I2CDevice::new(&bus,&SCD40_ADDRESS).expect("failed to get device");
+    let device = I2CDevice::new(&BUS,&SCD40_ADDRESS).expect("failed to get device");
     let session = SCD40Session::new(device).await.expect("failed to start session");
 
     loop {
@@ -190,10 +191,95 @@ async fn get_readings(_req: Request<State>) -> tide::Result {
     Ok(Response::builder(StatusCode::Ok).body(format!("todo")).build())
 }
 
+struct PMSA003IReading {
+    pm1_0_ug_m3: u16,
+    pm2_5_ug_m3: u16,
+    pm10_0_ug_m3: u16,
+
+    greater_0_3_ct: u16,
+    greater_0_5_ct: u16,
+    greater_1_0_ct: u16,
+    greater_2_5_ct: u16,
+    greater_5_0_ct: u16,
+    greater_10_0_ct: u16,
+}
+
+impl PMSA003IReading {
+
+    fn new(bytes: &[u8;32]) -> Result<Self,String> {
+        if bytes[0] != 0x42 || bytes[1] != 0x4d {
+            return Err("Bad reading".to_string());
+        }
+       let pm1_0_ug_m3_bytes:  [u8;2] = bytes[0x0a..0x0c].try_into().unwrap();
+       let pm2_5_ug_m3_bytes:  [u8;2] = bytes[0x0c..0x0e].try_into().unwrap();
+       let pm10_0_ug_m3_bytes:  [u8;2] = bytes[0x0e..0x10].try_into().unwrap();
+       let greater_0_3_ct_bytes: [u8;2] = bytes[0x10..0x12].try_into().unwrap();
+       let greater_0_5_ct_bytes: [u8;2] = bytes[0x12..0x14].try_into().unwrap();
+       let greater_1_0_ct_bytes: [u8;2] = bytes[0x14..0x16].try_into().unwrap();
+       let greater_2_5_ct_bytes: [u8;2] = bytes[0x16..0x18].try_into().unwrap();
+       let greater_5_0_ct_bytes: [u8;2] = bytes[0x18..0x1a].try_into().unwrap();
+       let greater_10_0_ct_bytes: [u8;2] = bytes[0x1a..0x1c].try_into().unwrap();
+
+        Ok(
+            PMSA003IReading {
+                pm1_0_ug_m3:  u16::from_be_bytes(pm1_0_ug_m3_bytes),
+                pm2_5_ug_m3:  u16::from_be_bytes(pm2_5_ug_m3_bytes),
+                pm10_0_ug_m3:  u16::from_be_bytes(pm10_0_ug_m3_bytes),
+                greater_0_3_ct: u16::from_be_bytes(greater_0_3_ct_bytes),
+                greater_0_5_ct: u16::from_be_bytes(greater_0_5_ct_bytes),
+                greater_1_0_ct: u16::from_be_bytes(greater_1_0_ct_bytes),
+                greater_2_5_ct: u16::from_be_bytes(greater_2_5_ct_bytes),
+                greater_5_0_ct: u16::from_be_bytes(greater_5_0_ct_bytes),
+                greater_10_0_ct: u16::from_be_bytes(greater_10_0_ct_bytes),
+            })
+
+    }
+}
+
+async fn read_pmsa003i(
+    pm1_0_ug_m3_metric: Family<Labels,Gauge>, 
+    pm2_5_ug_m3_metric: Family<Labels,Gauge>, 
+    pm10_0_ug_m3_metric: Family<Labels,Gauge>, 
+    greater_0_3_ct_metric: Family<Labels,Gauge>, 
+    greater_0_5_ct_metric: Family<Labels,Gauge>, 
+    greater_1_0_ct_metric: Family<Labels,Gauge>, 
+    greater_2_5_ct_metric: Family<Labels,Gauge>, 
+    greater_5_0_ct_metric: Family<Labels,Gauge>, 
+    greater_10_0_ct_metric: Family<Labels,Gauge>, 
+    ) {
+    let room = String::from("Hobby room");
+    let label = Labels{room:room};
+
+    let device = I2CDevice::new(&BUS,&PMSA003I_ADDRESS).expect("failed to get device");
+
+    loop {
+        let bytes: [u8;32] = [0;32];
+        let pointer_bytes = bytes.as_ptr();
+        let bytes_read:usize = unsafe {
+            libc::read(device.fd, pointer_bytes as *mut libc::c_void, 32)
+            }.try_into().unwrap();
+        let reading = PMSA003IReading::new(&bytes).unwrap();
+
+        pm1_0_ug_m3_metric.get_or_create(&label).set(reading.pm1_0_ug_m3 as i64);
+        pm2_5_ug_m3_metric.get_or_create(&label).set(reading.pm2_5_ug_m3 as i64);
+        pm10_0_ug_m3_metric.get_or_create(&label).set(reading.pm10_0_ug_m3 as i64);
+
+        greater_0_3_ct_metric.get_or_create(&label).set(reading.greater_0_3_ct as i64);
+        greater_0_5_ct_metric.get_or_create(&label).set(reading.greater_0_5_ct as i64);
+        greater_1_0_ct_metric.get_or_create(&label).set(reading.greater_1_0_ct as i64);
+        greater_2_5_ct_metric.get_or_create(&label).set(reading.greater_2_5_ct as i64);
+        greater_5_0_ct_metric.get_or_create(&label).set(reading.greater_5_0_ct as i64);
+        greater_10_0_ct_metric.get_or_create(&label).set(reading.greater_10_0_ct as i64);
+        println!("read");
+
+        async_std::task::sleep(Duration::from_millis(5000)).await;
+    }
+}
 
 
 #[async_std::main]
 async fn main() -> std::result::Result<(), std::io::Error> {
+
 
     //let state: Readings = Readings::new ( 500, 20.0, 50.0)?;
 
@@ -219,12 +305,79 @@ async fn main() -> std::result::Result<(), std::io::Error> {
         Other("percent".to_string()),
         rh_metric.clone(),
     );
+    let pm1_0_ug_m3_metric = Family::<Labels, Gauge>::default();
+    registry.register_with_unit(
+        "pm_1_0",
+        "Particles smaller than 1um in ug/m3",
+        Other("ug_per_m3".to_string()),
+        pm1_0_ug_m3_metric.clone(),
+    );
+    let pm2_5_ug_m3_metric = Family::<Labels, Gauge>::default();
+    registry.register_with_unit(
+        "pm_2_5",
+        "Particles smaller than 2.5um in ug/m3",
+        Other("ug_per_m3".to_string()),
+        pm2_5_ug_m3_metric.clone(),
+    );
+    let pm10_0_ug_m3_metric = Family::<Labels, Gauge>::default();
+    registry.register_with_unit(
+        "pm_10_0",
+        "Particles smaller than 10um in ug/m3",
+        Other("ug_per_m3".to_string()),
+        pm10_0_ug_m3_metric.clone(),
+    );
+    let greater_0_3_ct_metric= Family::<Labels, Gauge>::default();
+    registry.register(
+        "greater_0_3_ct",
+        "Particles larger than 0.3um in 0.1l of air",
+        greater_0_3_ct_metric.clone(),
+    );
+    let greater_0_5_ct_metric= Family::<Labels, Gauge>::default();
+    registry.register(
+        "greater_0_5_ct",
+        "Particles larger than 0.5um in 0.1l of air",
+        greater_0_5_ct_metric.clone(),
+    );
+    let greater_1_0_ct_metric= Family::<Labels, Gauge>::default();
+    registry.register(
+        "greater_1_0_ct",
+        "Particles larger than 1um in 0.1l of air",
+        greater_1_0_ct_metric.clone(),
+    );
+    let greater_2_5_ct_metric= Family::<Labels, Gauge>::default();
+    registry.register(
+        "greater_2_5_ct",
+        "Particles larger than 2.5um in 0.1l of air",
+        greater_2_5_ct_metric.clone(),
+    );
+    let greater_5_0_ct_metric= Family::<Labels, Gauge>::default();
+    registry.register(
+        "greater_5_0_ct",
+        "Particles larger than 5um in 0.1l of air",
+        greater_5_0_ct_metric.clone(),
+    );
+    let greater_10_0_ct_metric= Family::<Labels, Gauge>::default();
+    registry.register(
+        "greater_10_0_ct",
+        "Particles larger than 10um in 0.1l of air",
+        greater_10_0_ct_metric.clone(),
+    );
 
     let state = State {
         registry: Arc::new(registry)};
 
     task::spawn(async move {
         read_scd40(co2_metric,temp_c_metric,rh_metric).await;
+    });
+
+    task::spawn(async move {
+        read_pmsa003i(pm1_0_ug_m3_metric,pm2_5_ug_m3_metric, pm10_0_ug_m3_metric,
+                      greater_0_3_ct_metric,
+                      greater_0_5_ct_metric,
+                      greater_1_0_ct_metric,
+                      greater_2_5_ct_metric,
+                      greater_5_0_ct_metric,
+                      greater_10_0_ct_metric).await;
     });
 
     let mut app = tide::with_state(   state );
