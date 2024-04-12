@@ -9,7 +9,7 @@
 - [ ] Refactor to libs
 - [ ] add helpers
 - [ ] Read SGP40
-- [ ] Read PMSA003I
+- [x] Read PMSA003I
 - [ ] read Radoneye
 - [ ] Design enclosure
 
